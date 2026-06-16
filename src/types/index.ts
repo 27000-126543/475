@@ -115,7 +115,7 @@ export interface DownloadRecord {
 export interface FlowRecord {
   id: string
   manuscriptId: string
-  type: 'upload' | 'ocr_done' | 'supplement' | 'proofread_submit' | 'review_approve' | 'review_reject' | 'lock'
+  type: 'upload' | 'ocr_processing' | 'ocr_done' | 'supplement' | 'proofread_submit' | 'review_approve' | 'review_reject' | 'lock'
   status: string
   operatorId: string
   operatorName: string

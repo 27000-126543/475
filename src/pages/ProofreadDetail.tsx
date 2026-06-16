@@ -22,6 +22,7 @@ export default function ProofreadDetail() {
     getDiffReportBySubmissionId,
     submitProofread,
     resubmitProofread,
+    resubmitProofreadWithCarry,
     getSubmissionsByManuscriptId,
   } = useStore()
 
@@ -49,23 +50,24 @@ export default function ProofreadDetail() {
   const handleSubmit = () => {
     if (!id || !manuscript) return
     setSubmitting(true)
-    const diffTypes: Array<'wrong_char' | 'missing_char' | 'extra_char' | 'derivative'> = ['wrong_char', 'missing_char', 'extra_char', 'derivative']
-    const autoRecords = sortedPages.slice(0, Math.min(5, sortedPages.length)).map((p, i) => ({
-      id: `auto-${id}-p${p.pageNumber}-${Date.now()}-${i}`,
-      manuscriptId: id,
-      expertId: currentUser.id,
-      expertName: currentUser.name,
-      pageNumber: p.pageNumber,
-      originalText: p.ocrText?.slice(0, 6) || '天地玄黃',
-      correctedText: p.ocrText?.slice(0, 6) || '天地玄黃',
-      differenceType: diffTypes[i % 4],
-      note: `第${isResubmit ? lastSubmission?.version + 1 : 1}版校勘 - 第${p.pageNumber}页`,
-      createdAt: new Date().toISOString(),
-    }))
 
     if (isResubmit && lastSubmission) {
-      resubmitProofread(lastSubmission.id, autoRecords, submitNote || '重新提交审核')
+      const carriedRecords = lastSubmission.records.map((r) => ({ ...r }))
+      resubmitProofreadWithCarry(lastSubmission.id, carriedRecords, submitNote || '重新提交审核')
     } else {
+      const diffTypes: Array<'wrong_char' | 'missing_char' | 'extra_char' | 'derivative'> = ['wrong_char', 'missing_char', 'extra_char', 'derivative']
+      const autoRecords = sortedPages.slice(0, Math.min(5, sortedPages.length)).map((p, i) => ({
+        id: `auto-${id}-p${p.pageNumber}-${Date.now()}-${i}`,
+        manuscriptId: id,
+        expertId: currentUser.id,
+        expertName: currentUser.name,
+        pageNumber: p.pageNumber,
+        originalText: p.ocrText?.slice(0, 6) || '天地玄黃',
+        correctedText: p.ocrText?.slice(0, 6) || '天地玄黃',
+        differenceType: diffTypes[i % 4],
+        note: `第1版校勘 - 第${p.pageNumber}页`,
+        createdAt: new Date().toISOString(),
+      }))
       submitProofread(id, autoRecords, submitNote || '提交审核')
     }
 
@@ -386,10 +388,37 @@ export default function ProofreadDetail() {
                 </button>
               </div>
               <div className="p-6">
+                {diffReport.diffs.some(d => d.changeType) && (
+                  <div className="grid grid-cols-4 gap-3 mb-6">
+                    <div className="bg-ink-50 rounded-lg p-3 border border-ink-200 text-center">
+                      <p className="text-xs text-ink-500 mb-1">总计</p>
+                      <p className="text-xl font-bold text-ink-900">{diffReport.diffs.length}</p>
+                    </div>
+                    <div className="bg-green-50 rounded-lg p-3 border border-green-200 text-center">
+                      <p className="text-xs text-green-600 mb-1">沿用</p>
+                      <p className="text-xl font-bold text-green-700">
+                        {diffReport.diffs.filter(d => d.changeType === 'carried').length}
+                      </p>
+                    </div>
+                    <div className="bg-amber-50 rounded-lg p-3 border border-amber-200 text-center">
+                      <p className="text-xs text-amber-600 mb-1">修改</p>
+                      <p className="text-xl font-bold text-amber-700">
+                        {diffReport.diffs.filter(d => d.changeType === 'modified').length}
+                      </p>
+                    </div>
+                    <div className="bg-indigo-50 rounded-lg p-3 border border-indigo-200 text-center">
+                      <p className="text-xs text-indigo-600 mb-1">新增</p>
+                      <p className="text-xl font-bold text-indigo-700">
+                        {diffReport.diffs.filter(d => d.changeType === 'new').length}
+                      </p>
+                    </div>
+                  </div>
+                )}
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-ink-200">
                       <th className="text-left px-3 py-2 text-ink-600 font-medium">页码</th>
+                      <th className="text-left px-3 py-2 text-ink-600 font-medium">变化类型</th>
                       <th className="text-left px-3 py-2 text-ink-600 font-medium">差异类型</th>
                       <th className="text-left px-3 py-2 text-ink-600 font-medium">原文</th>
                       <th className="text-left px-3 py-2 text-ink-600 font-medium">修正文</th>
@@ -399,6 +428,20 @@ export default function ProofreadDetail() {
                     {diffReport.diffs.map((diff, i) => (
                       <tr key={i} className="border-b border-ink-100">
                         <td className="px-3 py-2 text-ink-700">第{diff.pageNumber}页</td>
+                        <td className="px-3 py-2">
+                          {diff.changeType === 'carried' && (
+                            <span className="text-xs px-2 py-0.5 rounded bg-green-100 text-green-700">沿用</span>
+                          )}
+                          {diff.changeType === 'modified' && (
+                            <span className="text-xs px-2 py-0.5 rounded bg-amber-100 text-amber-700">修改</span>
+                          )}
+                          {diff.changeType === 'new' && (
+                            <span className="text-xs px-2 py-0.5 rounded bg-indigo-100 text-indigo-700">新增</span>
+                          )}
+                          {!diff.changeType && (
+                            <span className="text-xs px-2 py-0.5 rounded bg-ink-100 text-ink-600">差异</span>
+                          )}
+                        </td>
                         <td className="px-3 py-2">
                           <span className={diffLabel[diff.diffType]?.cls || 'badge-red'}>
                             {diffLabel[diff.diffType]?.text || diff.diffType}

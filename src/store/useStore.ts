@@ -405,6 +405,18 @@ export const useStore = create<AppState>((set, get) => ({
         relatedMessageId: uploadMsg.id,
       }
 
+      const ocrProcessingFlow: FlowRecord = {
+        id: `fl-${Date.now()}-ocr-processing`,
+        manuscriptId: id,
+        type: 'ocr_processing',
+        status: '处理中',
+        operatorId: 'system',
+        operatorName: '系统',
+        operatorRole: 'engineer' as const,
+        timestamp: now,
+        description: `OCR识别中，正在处理${totalPages}页扫描影像...`,
+      }
+
       const newStandard: QualityStandard = {
         manuscriptId: id,
         manuscriptTitle: title,
@@ -485,7 +497,7 @@ export const useStore = create<AppState>((set, get) => ({
         manuscripts: [newManuscript, ...state.manuscripts],
         manuscriptPages: [...state.manuscriptPages, ...pages],
         messages: [...state.messages, uploadMsg],
-        flowRecords: [...state.flowRecords, uploadFlow],
+        flowRecords: [...state.flowRecords, uploadFlow, ocrProcessingFlow],
         qualityStandards: [...state.qualityStandards, newStandard],
         proofreadCycles: [...state.proofreadCycles, newCycle],
       }

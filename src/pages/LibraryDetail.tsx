@@ -7,7 +7,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 export default function LibraryDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
-  const { electronicBooks, getManuscriptPages, getManuscriptById, getDownloadRecordsByBookId, recordDownload } = useStore()
+  const { electronicBooks, getManuscriptPages, getManuscriptById, getDownloadRecordsByBookId, recordDownload, getLastDownloadByBookId } = useStore()
   const [currentPage, setCurrentPage] = useState(0)
   const [showDownloadDropdown, setShowDownloadDropdown] = useState(false)
 
@@ -15,6 +15,9 @@ export default function LibraryDetail() {
   const manuscript = useMemo(() => (book ? getManuscriptById(book.manuscriptId) : undefined), [book, getManuscriptById])
   const pages = useMemo(() => (book ? getManuscriptPages(book.manuscriptId) : []), [book, getManuscriptPages])
   const downloadRecords = useMemo(() => (book ? getDownloadRecordsByBookId(book.id) : []), [book, getDownloadRecordsByBookId])
+  const lastDownload = useMemo(() => (book ? getLastDownloadByBookId(book.id) : undefined), [book, getLastDownloadByBookId])
+  const pdfCount = useMemo(() => downloadRecords.filter(r => r.format === 'pdf').length, [downloadRecords])
+  const epubCount = useMemo(() => downloadRecords.filter(r => r.format === 'epub').length, [downloadRecords])
 
   const sortedPages = useMemo(() => [...pages].sort((a, b) => a.pageNumber - b.pageNumber), [pages])
   const current = sortedPages[currentPage] ?? null

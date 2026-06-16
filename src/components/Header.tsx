@@ -11,6 +11,7 @@ import {
   CheckCircle,
   XCircle,
   AlertTriangle,
+  Download,
 } from 'lucide-react'
 
 const roleLabels: Record<UserRole, string> = {
@@ -48,7 +49,9 @@ function getMessageIcon(type: Message['type']) {
     case 'proofread_submit': return FileText
     case 'review_approved': return CheckCircle
     case 'review_rejected': return XCircle
+    case 'download': return Download
     case 'alert': return AlertTriangle
+    default: return FileText
   }
 }
 
