@@ -193,6 +193,7 @@ export interface TrackingReport {
   submissionCount: number
   downloadCount: number
   summary: string
+  detailSnapshot: TrackingReportDetail
 }
 
 export interface TrackingReportDetail {

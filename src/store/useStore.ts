@@ -483,10 +483,10 @@ export const useStore = create<AppState>((set, get) => ({
             manuscripts: innerState.manuscripts.map((m) =>
               m.id === id ? { ...m, status: newStatus, updatedAt: new Date().toISOString() } : m
             ),
-            manuscriptPages: [
-              ...innerState.manuscriptPages,
-              ...updatedPages,
-            ],
+            manuscriptPages: innerState.manuscriptPages.map((p) => {
+              const updated = updatedPages.find((up) => up.id === p.id)
+              return updated || p
+            }),
             messages: [...innerState.messages, ocrMsg],
             flowRecords: [...innerState.flowRecords, ocrFlow],
           }
@@ -799,8 +799,55 @@ export const useStore = create<AppState>((set, get) => ({
     const newVersion = reports.length + 1
     const now = new Date().toISOString()
 
+    const pdfDownloads = downloadRecords.filter((r) => r.format === 'pdf').length
+    const epubDownloads = downloadRecords.filter((r) => r.format === 'epub').length
+    const lastDownload = downloadRecords.length > 0 ? downloadRecords[0] : undefined
+
+    const roleLabel: Record<string, string> = {
+      engineer: '数字化工程师',
+      proofreader: '校勘专家',
+      reviewer: '审校员',
+      admin: '管理员',
+    }
+
+    const detailSnapshot: TrackingReportDetail = {
+      reportId: `rpt${Date.now()}`,
+      manuscriptId,
+      basicInfo: {
+        title: manuscript.title,
+        author: manuscript.author,
+        dynasty: manuscript.dynasty,
+        totalPages: manuscript.totalPages,
+        status: manuscript.status,
+        createdAt: manuscript.createdAt,
+        currentAssignee: taskProgress?.currentAssignee || '未分配',
+        currentRole: taskProgress?.currentRole || 'engineer',
+      },
+      flowRecords: [...flowRecords],
+      submissions: submissions.map((s) => ({
+        id: s.id,
+        version: s.version,
+        status: s.status,
+        expertName: s.expertName,
+        reviewerName: s.reviewerName,
+        reviewNote: s.reviewNote,
+        createdAt: s.createdAt,
+        reviewedAt: s.reviewedAt,
+        recordCount: s.records.length,
+        rejectedPages: s.pageReviews?.filter((r) => !r.passed).length || 0,
+        pageReviews: s.pageReviews ? [...s.pageReviews] : undefined,
+      })),
+      downloadRecords: [...downloadRecords],
+      totalDownloads: downloadRecords.length,
+      pdfDownloads,
+      epubDownloads,
+      lastDownload: lastDownload
+        ? { by: lastDownload.downloadedBy, format: lastDownload.format, at: lastDownload.downloadedAt }
+        : undefined,
+    }
+
     const newReport: TrackingReport = {
-      id: `rpt${Date.now()}`,
+      id: detailSnapshot.reportId,
       manuscriptId,
       manuscriptTitle: manuscript.title,
       version: newVersion,
@@ -811,6 +858,7 @@ export const useStore = create<AppState>((set, get) => ({
       submissionCount: submissions.length,
       downloadCount: downloadRecords.length,
       summary: `v${newVersion} 追踪报告：${flowRecords.length}个流转节点，${submissions.length}次提交，${downloadRecords.length}次下载`,
+      detailSnapshot,
     }
 
     set((s) => ({ trackingReports: [...s.trackingReports, newReport] }))
@@ -940,57 +988,7 @@ export const useStore = create<AppState>((set, get) => ({
     const state = get()
     const report = state.trackingReports.find((r) => r.id === reportId)
     if (!report) return undefined
-
-    const manuscript = state.getManuscriptById(report.manuscriptId)
-    if (!manuscript) return undefined
-
-    const flowRecords = state.getFlowRecordsByManuscriptId(report.manuscriptId)
-    const submissions = state.getSubmissionsByManuscriptId(report.manuscriptId)
-    const book = state.getElectronicBookByManuscriptId(report.manuscriptId)
-    const downloadRecords = book ? state.getDownloadRecordsByBookId(book.id) : []
-    const taskProgress = state.taskProgress.find((t) => t.manuscriptId === report.manuscriptId)
-
-    const pdfDownloads = downloadRecords.filter((r) => r.format === 'pdf').length
-    const epubDownloads = downloadRecords.filter((r) => r.format === 'epub').length
-    const lastDownload = downloadRecords.length > 0 ? downloadRecords[0] : undefined
-
-    const detail: TrackingReportDetail = {
-      reportId: report.id,
-      manuscriptId: report.manuscriptId,
-      basicInfo: {
-        title: manuscript.title,
-        author: manuscript.author,
-        dynasty: manuscript.dynasty,
-        totalPages: manuscript.totalPages,
-        status: manuscript.status,
-        createdAt: manuscript.createdAt,
-        currentAssignee: taskProgress?.currentAssignee || '未分配',
-        currentRole: taskProgress?.currentRole || 'engineer',
-      },
-      flowRecords,
-      submissions: submissions.map((s) => ({
-        id: s.id,
-        version: s.version,
-        status: s.status,
-        expertName: s.expertName,
-        reviewerName: s.reviewerName,
-        reviewNote: s.reviewNote,
-        createdAt: s.createdAt,
-        reviewedAt: s.reviewedAt,
-        recordCount: s.records.length,
-        rejectedPages: s.pageReviews?.filter((r) => !r.passed).length || 0,
-        pageReviews: s.pageReviews,
-      })),
-      downloadRecords,
-      totalDownloads: downloadRecords.length,
-      pdfDownloads,
-      epubDownloads,
-      lastDownload: lastDownload
-        ? { by: lastDownload.downloadedBy, format: lastDownload.format, at: lastDownload.downloadedAt }
-        : undefined,
-    }
-
-    return detail
+    return report.detailSnapshot
   },
 
   getLastDownloadByBookId: (bookId) => {

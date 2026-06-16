@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useStore } from '@/store/useStore'
-import { ArrowLeft, ChevronLeft, ChevronRight, Download, FileText, BookOpen, Clock, Hash, Calendar, User } from 'lucide-react'
+import { ArrowLeft, ChevronLeft, ChevronRight, Download, FileText, BookOpen, Hash, Calendar, User } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 
 export default function LibraryDetail() {
@@ -135,22 +135,34 @@ export default function LibraryDetail() {
 
           <div className="p-4 border-b border-ink-200/60">
             <h3 className="text-sm font-semibold text-ink-700 mb-3">下载统计</h3>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-3 gap-2">
               <div className="bg-white rounded-lg p-3 border border-ink-200/40 text-center">
                 <div className="text-2xl font-bold text-indigo-600">{book.downloadCount}</div>
-                <div className="text-xs text-ink-500 mt-1">累计下载</div>
+                <div className="text-xs text-ink-500 mt-1">累计</div>
               </div>
               <div className="bg-white rounded-lg p-3 border border-ink-200/40 text-center">
-                <div className="text-lg font-bold text-ink-700">
-                  {downloadRecords.filter((r) => r.format === 'pdf').length}
-                </div>
+                <div className="text-lg font-bold text-red-500">{pdfCount}</div>
                 <div className="text-xs text-ink-500 mt-1">PDF</div>
               </div>
+              <div className="bg-white rounded-lg p-3 border border-ink-200/40 text-center">
+                <div className="text-lg font-bold text-green-600">{epubCount}</div>
+                <div className="text-xs text-ink-500 mt-1">EPUB</div>
+              </div>
             </div>
-            {book.lastDownloadedAt && (
-              <div className="mt-3 text-xs text-ink-500 flex items-center gap-1.5">
-                <Clock className="w-3.5 h-3.5" />
-                最近下载：{new Date(book.lastDownloadedAt).toLocaleString('zh-CN')}
+            {lastDownload && (
+              <div className="mt-3 p-2.5 bg-indigo-50/50 rounded-lg border border-indigo-200/40">
+                <div className="text-xs text-ink-500 mb-1">最近下载</div>
+                <div className="flex items-center justify-between text-sm">
+                  <span className="font-medium text-ink-700">{lastDownload.downloadedBy}</span>
+                  <span className={`text-xs px-2 py-0.5 rounded ${
+                    lastDownload.format === 'pdf' ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-600'
+                  }`}>
+                    {lastDownload.format.toUpperCase()}
+                  </span>
+                </div>
+                <div className="text-xs text-ink-400 mt-1">
+                  {new Date(lastDownload.downloadedAt).toLocaleString('zh-CN')}
+                </div>
               </div>
             )}
           </div>
