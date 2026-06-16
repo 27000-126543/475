@@ -658,6 +658,8 @@ export const proofreadSubmissions: ProofreadSubmission[] = [
     reviewerName: '',
     reviewedAt: '',
     createdAt: '2026-06-13T15:00:00Z',
+    version: 1,
+    pageReviews: [],
     records: [
       {
         id: 'pr003-1',
