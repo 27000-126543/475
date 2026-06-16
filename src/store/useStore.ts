@@ -50,6 +50,7 @@ interface AppState {
   taskProgress: TaskProgress[]
   flowRecords: FlowRecord[]
   downloadRecords: DownloadRecord[]
+  trackingReports: TrackingReport[]
 
   setCurrentUser: (user: User) => void
   switchRole: (role: UserRole) => void
@@ -66,6 +67,8 @@ interface AppState {
   resubmitProofread: (submissionId: string, records: ProofreadRecord[], note: string) => void
   pushAlertToAdmin: (title: string, content: string, manuscriptId?: string) => void
   recordDownload: (bookId: string, format: 'pdf' | 'epub') => void
+  generateTrackingReport: (manuscriptId: string) => TrackingReport
+  resubmitProofreadWithCarry: (submissionId: string, updatedRecords: ProofreadRecord[], note: string) => void
 
   getManuscriptPages: (manuscriptId: string) => ManuscriptPage[]
   getManuscriptById: (id: string) => Manuscript | undefined
@@ -81,6 +84,9 @@ interface AppState {
   getFlowRecordsByManuscriptId: (manuscriptId: string) => FlowRecord[]
   getDownloadRecordsByBookId: (bookId: string) => DownloadRecord[]
   getLastSubmissionByManuscriptId: (manuscriptId: string) => ProofreadSubmission | undefined
+  getTrackingReportsByManuscriptId: (manuscriptId: string) => TrackingReport[]
+  getTrackingReportDetail: (reportId: string) => TrackingReportDetail | undefined
+  getLastDownloadByBookId: (bookId: string) => DownloadRecord | undefined
 }
 
 const generateSampleOcrText = (pageNumber: number): string => {
@@ -146,6 +152,7 @@ export const useStore = create<AppState>((set, get) => ({
   taskProgress: mockTaskProgress,
   flowRecords: mockFlowRecords,
   downloadRecords: mockDownloadRecords,
+  trackingReports: [],
 
   setCurrentUser: (user) => set({ currentUser: user }),
 
@@ -763,5 +770,219 @@ export const useStore = create<AppState>((set, get) => ({
   getLastSubmissionByManuscriptId: (manuscriptId) => {
     const subs = get().getSubmissionsByManuscriptId(manuscriptId)
     return subs.length > 0 ? subs[0] : undefined
+  },
+
+  generateTrackingReport: (manuscriptId) => {
+    const state = get()
+    const manuscript = state.getManuscriptById(manuscriptId)
+    if (!manuscript) return {} as TrackingReport
+
+    const flowRecords = state.getFlowRecordsByManuscriptId(manuscriptId)
+    const submissions = state.getSubmissionsByManuscriptId(manuscriptId)
+    const book = state.getElectronicBookByManuscriptId(manuscriptId)
+    const downloadRecords = book ? state.getDownloadRecordsByBookId(book.id) : []
+    const taskProgress = state.taskProgress.find((t) => t.manuscriptId === manuscriptId)
+
+    const reports = state.trackingReports.filter((r) => r.manuscriptId === manuscriptId)
+    const newVersion = reports.length + 1
+    const now = new Date().toISOString()
+
+    const newReport: TrackingReport = {
+      id: `rpt${Date.now()}`,
+      manuscriptId,
+      manuscriptTitle: manuscript.title,
+      version: newVersion,
+      generatedAt: now,
+      generatedBy: state.currentUser.name,
+      generatedById: state.currentUser.id,
+      flowNodeCount: flowRecords.length,
+      submissionCount: submissions.length,
+      downloadCount: downloadRecords.length,
+      summary: `v${newVersion} 追踪报告：${flowRecords.length}个流转节点，${submissions.length}次提交，${downloadRecords.length}次下载`,
+    }
+
+    set((s) => ({ trackingReports: [...s.trackingReports, newReport] }))
+    return newReport
+  },
+
+  resubmitProofreadWithCarry: (submissionId, updatedRecords, note) => {
+    const state = get()
+    const user = state.currentUser
+    const oldSubmission = state.proofreadSubmissions.find((s) => s.id === submissionId)
+    if (!oldSubmission) return
+    const manuscript = state.manuscripts.find((m) => m.id === oldSubmission.manuscriptId)
+    if (!manuscript) return
+
+    const oldRecords = oldSubmission.records
+    const oldRecordMap = new Map(oldRecords.map((r) => [`${r.pageNumber}-${r.differenceType}-${r.originalText}`, r]))
+
+    const newVersion = oldSubmission.version + 1
+    const newSubmissionId = `ps${Date.now()}`
+    const now = new Date().toISOString()
+
+    const finalRecords: ProofreadRecord[] = []
+    const diffItems: Array<{ pageNumber: number; originalText: string; correctedText: string; diffType: string; changeType: 'new' | 'modified' | 'carried' }> = []
+
+    updatedRecords.forEach((r) => {
+      const key = `${r.pageNumber}-${r.differenceType}-${r.originalText}`
+      const oldRecord = oldRecordMap.get(key)
+      const record: ProofreadRecord = {
+        ...r,
+        id: `auto-${oldSubmission.manuscriptId}-p${r.pageNumber}-${Date.now()}-${Math.random()}`,
+        expertId: user.id,
+        expertName: user.name,
+        manuscriptId: oldSubmission.manuscriptId,
+        createdAt: now,
+      }
+      finalRecords.push(record)
+
+      if (!oldRecord) {
+        diffItems.push({ pageNumber: r.pageNumber, originalText: r.originalText, correctedText: r.correctedText, diffType: r.differenceType, changeType: 'new' })
+      } else if (oldRecord.correctedText !== r.correctedText || oldRecord.note !== r.note) {
+        diffItems.push({ pageNumber: r.pageNumber, originalText: r.originalText, correctedText: r.correctedText, diffType: r.differenceType, changeType: 'modified' })
+      } else {
+        diffItems.push({ pageNumber: r.pageNumber, originalText: r.originalText, correctedText: r.correctedText, diffType: r.differenceType, changeType: 'carried' })
+      }
+      oldRecordMap.delete(key)
+    })
+
+    oldRecordMap.forEach((r) => {
+      diffItems.push({ pageNumber: r.pageNumber, originalText: r.originalText, correctedText: r.correctedText, diffType: r.differenceType, changeType: 'carried' })
+      finalRecords.push({ ...r, id: `carry-${r.id}-${Date.now()}`, createdAt: now })
+    })
+
+    const newSubmission: ProofreadSubmission = {
+      id: newSubmissionId,
+      manuscriptId: oldSubmission.manuscriptId,
+      expertId: user.id,
+      expertName: user.name,
+      totalPages: manuscript.totalPages,
+      status: 'pending_review',
+      reviewNote: note,
+      reviewerId: '',
+      reviewerName: '',
+      reviewedAt: '',
+      createdAt: now,
+      version: newVersion,
+      records: finalRecords,
+      pageReviews: [],
+    }
+
+    const diffReport: VersionDiffReport = {
+      id: `vdr${Date.now()}`,
+      submissionId: newSubmissionId,
+      manuscriptId: oldSubmission.manuscriptId,
+      diffs: diffItems,
+      generatedAt: now,
+    }
+
+    const updatedManuscripts = state.manuscripts.map((m) =>
+      m.id === oldSubmission.manuscriptId ? { ...m, status: 'reviewing' as const, updatedAt: now } : m
+    )
+
+    const reviewer = state.getReviewerUser()
+    const reviewMsg: Message = {
+      id: `msg${Date.now()}`,
+      type: 'proofread_submit',
+      title: '校勘提交待审核',
+      content: `${user.name}重新提交了《${manuscript.title}》的校勘结果（第${newVersion}版），含${finalRecords.length}条校勘记录（其中${diffItems.filter(d => d.changeType === 'new').length}条新增，${diffItems.filter(d => d.changeType === 'modified').length}条修改，${diffItems.filter(d => d.changeType === 'carried').length}条沿用），请及时审核。`,
+      targetUserId: reviewer?.id || '',
+      relatedManuscriptId: oldSubmission.manuscriptId,
+      relatedTaskId: newSubmissionId,
+      isRead: false,
+      hasVoucher: false,
+      voucherUrl: '',
+      createdAt: now,
+    }
+
+    const flowRecord: FlowRecord = {
+      id: `fl-${Date.now()}-resubmit`,
+      manuscriptId: oldSubmission.manuscriptId,
+      type: 'proofread_submit',
+      status: '审核中',
+      operatorId: user.id,
+      operatorName: user.name,
+      operatorRole: user.role,
+      timestamp: now,
+      description: `重新提交第${newVersion}版校勘结果，共${finalRecords.length}条记录（新增${diffItems.filter(d => d.changeType === 'new').length}，修改${diffItems.filter(d => d.changeType === 'modified').length}，沿用${diffItems.filter(d => d.changeType === 'carried').length}）`,
+      relatedSubmissionId: newSubmissionId,
+      relatedMessageId: reviewMsg.id,
+    }
+
+    set((s) => ({
+      proofreadSubmissions: [newSubmission, ...s.proofreadSubmissions],
+      versionDiffReports: [...s.versionDiffReports, diffReport],
+      manuscripts: updatedManuscripts,
+      messages: [...s.messages, reviewMsg],
+      flowRecords: [...s.flowRecords, flowRecord],
+    }))
+  },
+
+  getTrackingReportsByManuscriptId: (manuscriptId) =>
+    get()
+      .trackingReports
+      .filter((r) => r.manuscriptId === manuscriptId)
+      .sort((a, b) => new Date(b.generatedAt).getTime() - new Date(a.generatedAt).getTime()),
+
+  getTrackingReportDetail: (reportId) => {
+    const state = get()
+    const report = state.trackingReports.find((r) => r.id === reportId)
+    if (!report) return undefined
+
+    const manuscript = state.getManuscriptById(report.manuscriptId)
+    if (!manuscript) return undefined
+
+    const flowRecords = state.getFlowRecordsByManuscriptId(report.manuscriptId)
+    const submissions = state.getSubmissionsByManuscriptId(report.manuscriptId)
+    const book = state.getElectronicBookByManuscriptId(report.manuscriptId)
+    const downloadRecords = book ? state.getDownloadRecordsByBookId(book.id) : []
+    const taskProgress = state.taskProgress.find((t) => t.manuscriptId === report.manuscriptId)
+
+    const pdfDownloads = downloadRecords.filter((r) => r.format === 'pdf').length
+    const epubDownloads = downloadRecords.filter((r) => r.format === 'epub').length
+    const lastDownload = downloadRecords.length > 0 ? downloadRecords[0] : undefined
+
+    const detail: TrackingReportDetail = {
+      reportId: report.id,
+      manuscriptId: report.manuscriptId,
+      basicInfo: {
+        title: manuscript.title,
+        author: manuscript.author,
+        dynasty: manuscript.dynasty,
+        totalPages: manuscript.totalPages,
+        status: manuscript.status,
+        createdAt: manuscript.createdAt,
+        currentAssignee: taskProgress?.currentAssignee || '未分配',
+        currentRole: taskProgress?.currentRole || 'engineer',
+      },
+      flowRecords,
+      submissions: submissions.map((s) => ({
+        id: s.id,
+        version: s.version,
+        status: s.status,
+        expertName: s.expertName,
+        reviewerName: s.reviewerName,
+        reviewNote: s.reviewNote,
+        createdAt: s.createdAt,
+        reviewedAt: s.reviewedAt,
+        recordCount: s.records.length,
+        rejectedPages: s.pageReviews?.filter((r) => !r.passed).length || 0,
+        pageReviews: s.pageReviews,
+      })),
+      downloadRecords,
+      totalDownloads: downloadRecords.length,
+      pdfDownloads,
+      epubDownloads,
+      lastDownload: lastDownload
+        ? { by: lastDownload.downloadedBy, format: lastDownload.format, at: lastDownload.downloadedAt }
+        : undefined,
+    }
+
+    return detail
+  },
+
+  getLastDownloadByBookId: (bookId) => {
+    const records = get().getDownloadRecordsByBookId(bookId)
+    return records.length > 0 ? records[0] : undefined
   },
 }))
