@@ -87,6 +87,7 @@ export interface DiffItem {
   originalText: string
   correctedText: string
   diffType: string
+  changeType?: 'new' | 'modified' | 'carried'
 }
 
 export interface ElectronicBook {
@@ -178,4 +179,56 @@ export interface TaskProgress {
   elapsedDuration: number
   progressPercentage: number
   isAlerted: boolean
+}
+
+export interface TrackingReport {
+  id: string
+  manuscriptId: string
+  manuscriptTitle: string
+  version: number
+  generatedAt: string
+  generatedBy: string
+  generatedById: string
+  flowNodeCount: number
+  submissionCount: number
+  downloadCount: number
+  summary: string
+}
+
+export interface TrackingReportDetail {
+  reportId: string
+  manuscriptId: string
+  basicInfo: {
+    title: string
+    author: string
+    dynasty: string
+    totalPages: number
+    status: string
+    createdAt: string
+    currentAssignee: string
+    currentRole: string
+  }
+  flowRecords: FlowRecord[]
+  submissions: Array<{
+    id: string
+    version: number
+    status: string
+    expertName: string
+    reviewerName: string
+    reviewNote: string
+    createdAt: string
+    reviewedAt: string
+    recordCount: number
+    rejectedPages: number
+    pageReviews?: PageReview[]
+  }>
+  downloadRecords: DownloadRecord[]
+  totalDownloads: number
+  pdfDownloads: number
+  epubDownloads: number
+  lastDownload?: {
+    by: string
+    format: string
+    at: string
+  }
 }

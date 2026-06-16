@@ -9,6 +9,7 @@ const TABS = [
   { key: 'proofread_submit', label: '校勘提交' },
   { key: 'review_approved', label: '审核通过' },
   { key: 'review_rejected', label: '审核退回' },
+  { key: 'download', label: '下载记录' },
   { key: 'alert', label: '预警' },
 ] as const
 
@@ -17,6 +18,7 @@ const TYPE_ICON: Record<string, typeof Upload> = {
   proofread_submit: FileCheck,
   review_approved: CheckCircle,
   review_rejected: XCircle,
+  download: Download,
   alert: AlertTriangle,
 }
 
@@ -25,6 +27,7 @@ const TYPE_COLOR: Record<string, string> = {
   proofread_submit: 'text-amber-500',
   review_approved: 'text-green-500',
   review_rejected: 'text-cinnabar-500',
+  download: 'text-emerald-500',
   alert: 'text-cinnabar-500',
 }
 

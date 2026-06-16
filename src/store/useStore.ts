@@ -13,6 +13,11 @@ import type {
   TaskProgress,
   UserRole,
   ProofreadRecord,
+  FlowRecord,
+  DownloadRecord,
+  PageReview,
+  TrackingReport,
+  TrackingReportDetail,
 } from '@/types'
 import {
   users as mockUsers,
@@ -26,6 +31,8 @@ import {
   performanceRecords as mockPerformance,
   messages as mockMessages,
   taskProgress as mockTaskProgress,
+  flowRecords as mockFlowRecords,
+  downloadRecords as mockDownloadRecords,
 } from '@/data/mockData'
 
 interface AppState {
@@ -41,30 +48,39 @@ interface AppState {
   performanceRecords: PerformanceRecord[]
   messages: Message[]
   taskProgress: TaskProgress[]
+  flowRecords: FlowRecord[]
+  downloadRecords: DownloadRecord[]
 
   setCurrentUser: (user: User) => void
   switchRole: (role: UserRole) => void
   markMessageRead: (id: string) => void
   markAllMessagesRead: () => void
-  approveSubmission: (id: string) => void
-  rejectSubmission: (id: string, reason: string) => void
+  approveSubmission: (id: string, pageReviews?: PageReview[]) => void
+  rejectSubmission: (id: string, reason: string, pageReviews?: PageReview[]) => void
   submitSupplement: (pageId: string, text: string) => void
   updateQualityStandard: (manuscriptId: string, data: Partial<QualityStandard>) => void
   updateProofreadCycle: (manuscriptId: string, data: Partial<ProofreadCycle>) => void
   addMessage: (msg: Message) => void
   createManuscript: (data: { title: string; author: string; dynasty: string; totalPages: number }) => void
   submitProofread: (manuscriptId: string, records: ProofreadRecord[], note: string) => void
+  resubmitProofread: (submissionId: string, records: ProofreadRecord[], note: string) => void
   pushAlertToAdmin: (title: string, content: string, manuscriptId?: string) => void
+  recordDownload: (bookId: string, format: 'pdf' | 'epub') => void
 
   getManuscriptPages: (manuscriptId: string) => ManuscriptPage[]
   getManuscriptById: (id: string) => Manuscript | undefined
   getSubmissionById: (id: string) => ProofreadSubmission | undefined
+  getSubmissionsByManuscriptId: (manuscriptId: string) => ProofreadSubmission[]
   getDiffReportBySubmissionId: (submissionId: string) => VersionDiffReport | undefined
   getUnreadMessages: () => Message[]
   getMessagesByType: (type: string) => Message[]
   getElectronicBookByManuscriptId: (manuscriptId: string) => ElectronicBook | undefined
   getLockedElectronicBooks: () => ElectronicBook[]
   getAdminUser: () => User | undefined
+  getReviewerUser: () => User | undefined
+  getFlowRecordsByManuscriptId: (manuscriptId: string) => FlowRecord[]
+  getDownloadRecordsByBookId: (bookId: string) => DownloadRecord[]
+  getLastSubmissionByManuscriptId: (manuscriptId: string) => ProofreadSubmission | undefined
 }
 
 const generateSampleOcrText = (pageNumber: number): string => {
@@ -105,9 +121,9 @@ const buildPagesForManuscript = (
       manuscriptId,
       pageNumber: i,
       imageUrl: generatePageImage(manuscriptId, i),
-      ocrText: needsSupplement && baseConfidence < 0.5 ? '' : generateSampleOcrText(i),
-      ocrConfidence: Math.round(baseConfidence * 100) / 100,
-      needsSupplement,
+      ocrText: '',
+      ocrConfidence: 0,
+      needsSupplement: false,
       supplementedText: '',
       status: 'pending_ocr',
     })
@@ -128,6 +144,8 @@ export const useStore = create<AppState>((set, get) => ({
   performanceRecords: mockPerformance,
   messages: mockMessages,
   taskProgress: mockTaskProgress,
+  flowRecords: mockFlowRecords,
+  downloadRecords: mockDownloadRecords,
 
   setCurrentUser: (user) => set({ currentUser: user }),
 
@@ -148,83 +166,164 @@ export const useStore = create<AppState>((set, get) => ({
       ),
     })),
 
-  approveSubmission: (id) =>
+  approveSubmission: (id, pageReviews) =>
     set((state) => {
       const submission = state.proofreadSubmissions.find((s) => s.id === id)
       if (!submission) return state
+      const now = new Date().toISOString()
 
       const updatedSubmissions = state.proofreadSubmissions.map((s) =>
         s.id === id
-          ? { ...s, status: 'approved' as const, reviewerId: state.currentUser.id, reviewerName: state.currentUser.name, reviewedAt: new Date().toISOString() }
+          ? {
+              ...s,
+              status: 'approved' as const,
+              reviewerId: state.currentUser.id,
+              reviewerName: state.currentUser.name,
+              reviewedAt: now,
+              pageReviews: pageReviews || s.pageReviews,
+            }
           : s
       )
 
       const updatedManuscripts = state.manuscripts.map((m) =>
-        m.id === submission.manuscriptId ? { ...m, status: 'completed' as const, updatedAt: new Date().toISOString() } : m
+        m.id === submission.manuscriptId ? { ...m, status: 'completed' as const, updatedAt: now } : m
       )
 
       const manuscript = updatedManuscripts.find((m) => m.id === submission.manuscriptId)
-      const newBook: ElectronicBook = {
-        id: `eb${Date.now()}`,
-        manuscriptId: submission.manuscriptId,
-        bookNumber: `EBSK-2026-${String(state.electronicBooks.filter(b => b.lockedAt).length + 1).padStart(4, '0')}`,
-        title: manuscript?.title || '',
-        lockedAt: new Date().toISOString(),
-        lockedBy: state.currentUser.name,
-        version: 1,
+
+      const existingBook = state.electronicBooks.find((b) => b.manuscriptId === submission.manuscriptId && b.lockedAt)
+      let newBooks = state.electronicBooks
+      let bookVersion = 1
+      if (existingBook) {
+        bookVersion = existingBook.version + 1
+        newBooks = state.electronicBooks.map((b) =>
+          b.id === existingBook.id
+            ? { ...b, version: bookVersion, lockedAt: now, lockedBy: state.currentUser.name }
+            : b
+        )
+      } else {
+        const lockedCount = state.electronicBooks.filter((b) => b.lockedAt).length + 1
+        const newBook: ElectronicBook = {
+          id: `eb${Date.now()}`,
+          manuscriptId: submission.manuscriptId,
+          bookNumber: `EBSK-2026-${String(lockedCount).padStart(4, '0')}`,
+          title: manuscript?.title || '',
+          lockedAt: now,
+          lockedBy: state.currentUser.name,
+          version: 1,
+          downloadCount: 0,
+          lastDownloadedAt: '',
+        }
+        newBooks = [...state.electronicBooks, newBook]
       }
 
       const approvalMsg: Message = {
         id: `msg${Date.now()}`,
         type: 'review_approved',
         title: '校勘审核通过',
-        content: `${state.currentUser.name}已审核通过《${manuscript?.title || ''}》校勘提交，电子古籍已自动生成并锁定。`,
+        content: `${state.currentUser.name}已审核通过《${manuscript?.title || ''}》校勘提交（第${submission.version}版），电子古籍已自动生成并锁定。`,
         targetUserId: submission.expertId,
         relatedManuscriptId: submission.manuscriptId,
         relatedTaskId: id,
         isRead: false,
         hasVoucher: true,
         voucherUrl: 'https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=Chinese+traditional+seal+stamp+voucher+approval+certificate&image_size=square_hd',
-        createdAt: new Date().toISOString(),
+        createdAt: now,
+      }
+
+      const flowRecord: FlowRecord = {
+        id: `fl-${Date.now()}-approve`,
+        manuscriptId: submission.manuscriptId,
+        type: 'review_approve',
+        status: '已完成',
+        operatorId: state.currentUser.id,
+        operatorName: state.currentUser.name,
+        operatorRole: state.currentUser.role,
+        timestamp: now,
+        description: `审核通过第${submission.version}版校勘提交，${pageReviews ? `${pageReviews.filter(r => r.passed).length}页通过` : ''}`,
+        relatedSubmissionId: id,
+        relatedMessageId: approvalMsg.id,
+      }
+
+      const lockFlow: FlowRecord = {
+        id: `fl-${Date.now()}-lock`,
+        manuscriptId: submission.manuscriptId,
+        type: 'lock',
+        status: '已完成',
+        operatorId: state.currentUser.id,
+        operatorName: state.currentUser.name,
+        operatorRole: state.currentUser.role,
+        timestamp: now,
+        description: `电子古籍已生成并锁定，版本 v${bookVersion}`,
       }
 
       return {
         proofreadSubmissions: updatedSubmissions,
         manuscripts: updatedManuscripts,
-        electronicBooks: [...state.electronicBooks, newBook],
+        electronicBooks: newBooks,
         messages: [...state.messages, approvalMsg],
+        flowRecords: [...state.flowRecords, flowRecord, lockFlow],
       }
     }),
 
-  rejectSubmission: (id, reason) =>
+  rejectSubmission: (id, reason, pageReviews) =>
     set((state) => {
       const submission = state.proofreadSubmissions.find((s) => s.id === id)
       if (!submission) return state
+      const now = new Date().toISOString()
       const manuscript = state.manuscripts.find((m) => m.id === submission.manuscriptId)
 
       const updatedSubmissions = state.proofreadSubmissions.map((s) =>
         s.id === id
-          ? { ...s, status: 'rejected' as const, reviewNote: reason, reviewerId: state.currentUser.id, reviewerName: state.currentUser.name, reviewedAt: new Date().toISOString() }
+          ? {
+              ...s,
+              status: 'rejected' as const,
+              reviewNote: reason,
+              reviewerId: state.currentUser.id,
+              reviewerName: state.currentUser.name,
+              reviewedAt: now,
+              pageReviews: pageReviews || s.pageReviews,
+            }
           : s
+      )
+
+      const updatedManuscripts = state.manuscripts.map((m) =>
+        m.id === submission.manuscriptId ? { ...m, status: 'proofreading' as const, updatedAt: now } : m
       )
 
       const rejectMsg: Message = {
         id: `msg${Date.now()}`,
         type: 'review_rejected',
         title: '校勘审核退回',
-        content: `${state.currentUser.name}退回了《${manuscript?.title || ''}》校勘提交，原因：${reason}`,
+        content: `${state.currentUser.name}退回了《${manuscript?.title || ''}》第${submission.version}版校勘提交，原因：${reason}`,
         targetUserId: submission.expertId,
         relatedManuscriptId: submission.manuscriptId,
         relatedTaskId: id,
         isRead: false,
         hasVoucher: false,
         voucherUrl: '',
-        createdAt: new Date().toISOString(),
+        createdAt: now,
+      }
+
+      const flowRecord: FlowRecord = {
+        id: `fl-${Date.now()}-reject`,
+        manuscriptId: submission.manuscriptId,
+        type: 'review_reject',
+        status: '已退回',
+        operatorId: state.currentUser.id,
+        operatorName: state.currentUser.name,
+        operatorRole: state.currentUser.role,
+        timestamp: now,
+        description: `审核退回第${submission.version}版，${pageReviews ? `${pageReviews.filter(r => !r.passed).length}页需修改` : reason}`,
+        relatedSubmissionId: id,
+        relatedMessageId: rejectMsg.id,
       }
 
       return {
         proofreadSubmissions: updatedSubmissions,
+        manuscripts: updatedManuscripts,
         messages: [...state.messages, rejectMsg],
+        flowRecords: [...state.flowRecords, flowRecord],
       }
     }),
 
@@ -272,22 +371,6 @@ export const useStore = create<AppState>((set, get) => ({
 
       const pages = buildPagesForManuscript(id, totalPages, minConfidence)
 
-      setTimeout(() => {
-        set((innerState) => {
-          const anyNeedsSupplement = pages.some((p) => p.needsSupplement)
-          const newStatus = anyNeedsSupplement ? 'pending_supplement' : 'proofreading'
-          return {
-            manuscripts: innerState.manuscripts.map((m) =>
-              m.id === id ? { ...m, status: newStatus as 'pending_supplement' | 'proofreading', updatedAt: new Date().toISOString() } : m
-            ),
-            manuscriptPages: [
-              ...innerState.manuscriptPages,
-              ...pages.map((p) => ({ ...p, status: (p.needsSupplement ? 'supplementing' : 'ocr_done') as ManuscriptPage['status'] })),
-            ],
-          }
-        })
-      }, 2500)
-
       const uploadMsg: Message = {
         id: `msg${Date.now()}`,
         type: 'upload',
@@ -300,6 +383,19 @@ export const useStore = create<AppState>((set, get) => ({
         hasVoucher: false,
         voucherUrl: '',
         createdAt: now,
+      }
+
+      const uploadFlow: FlowRecord = {
+        id: `fl-${Date.now()}-upload`,
+        manuscriptId: id,
+        type: 'upload',
+        status: '已完成',
+        operatorId: state.currentUser.id,
+        operatorName: state.currentUser.name,
+        operatorRole: state.currentUser.role,
+        timestamp: now,
+        description: `上传《${title}》扫描影像，共${totalPages}页`,
+        relatedMessageId: uploadMsg.id,
       }
 
       const newStandard: QualityStandard = {
@@ -320,9 +416,69 @@ export const useStore = create<AppState>((set, get) => ({
         overduePercentage: 0,
       }
 
+      setTimeout(() => {
+        set((innerState) => {
+          const updatedPages = pages.map((p) => {
+            const baseConfidence = 0.6 + Math.random() * 0.4
+            const needsSupplement = baseConfidence < minConfidence
+            return {
+              ...p,
+              ocrText: needsSupplement && baseConfidence < 0.5 ? '' : generateSampleOcrText(p.pageNumber),
+              ocrConfidence: Math.round(baseConfidence * 100) / 100,
+              needsSupplement,
+              status: (needsSupplement ? 'supplementing' : 'ocr_done') as ManuscriptPage['status'],
+            }
+          })
+
+          const anyNeedsSupplement = updatedPages.some((p) => p.needsSupplement)
+          const newStatus: Manuscript['status'] = anyNeedsSupplement ? 'pending_supplement' : 'proofreading'
+
+          const ocrMsg: Message = {
+            id: `msg-ocr-${Date.now()}`,
+            type: 'upload',
+            title: 'OCR处理完成',
+            content: `《${title}》OCR识别已完成，${anyNeedsSupplement ? '检测到低置信度页面，需要人工补录' : '全部页面识别正常，可进入校勘'}。`,
+            targetUserId: state.currentUser.id,
+            relatedManuscriptId: id,
+            relatedTaskId: id,
+            isRead: false,
+            hasVoucher: false,
+            voucherUrl: '',
+            createdAt: new Date().toISOString(),
+          }
+
+          const ocrFlow: FlowRecord = {
+            id: `fl-ocr-${Date.now()}`,
+            manuscriptId: id,
+            type: 'ocr_done',
+            status: '已完成',
+            operatorId: 'system',
+            operatorName: '系统',
+            operatorRole: 'engineer' as const,
+            timestamp: new Date().toISOString(),
+            description: `OCR识别完成，${anyNeedsSupplement ? `${updatedPages.filter(p => p.needsSupplement).length}页需人工补录` : '全部识别正常'}`,
+            relatedMessageId: ocrMsg.id,
+          }
+
+          return {
+            manuscripts: innerState.manuscripts.map((m) =>
+              m.id === id ? { ...m, status: newStatus, updatedAt: new Date().toISOString() } : m
+            ),
+            manuscriptPages: [
+              ...innerState.manuscriptPages,
+              ...updatedPages,
+            ],
+            messages: [...innerState.messages, ocrMsg],
+            flowRecords: [...innerState.flowRecords, ocrFlow],
+          }
+        })
+      }, 2500)
+
       return {
         manuscripts: [newManuscript, ...state.manuscripts],
+        manuscriptPages: [...state.manuscriptPages, ...pages],
         messages: [...state.messages, uploadMsg],
+        flowRecords: [...state.flowRecords, uploadFlow],
         qualityStandards: [...state.qualityStandards, newStandard],
         proofreadCycles: [...state.proofreadCycles, newCycle],
       }
@@ -349,7 +505,9 @@ export const useStore = create<AppState>((set, get) => ({
         reviewerName: '',
         reviewedAt: '',
         createdAt: now,
+        version: 1,
         records,
+        pageReviews: [],
       }
 
       const diffs = records.map((r) => ({
@@ -371,13 +529,13 @@ export const useStore = create<AppState>((set, get) => ({
         m.id === manuscriptId ? { ...m, status: 'reviewing' as const, updatedAt: now } : m
       )
 
-      const admin = get().getAdminUser()
+      const reviewer = get().getReviewerUser()
       const reviewMsg: Message = {
         id: `msg${Date.now()}`,
         type: 'proofread_submit',
         title: '校勘提交待审核',
-        content: `${user.name}提交了《${manuscript.title}》的校勘结果，共${manuscript.totalPages}页，含${records.length}条校勘记录，请及时审核。`,
-        targetUserId: admin?.id || '',
+        content: `${user.name}提交了《${manuscript.title}》的校勘结果（第1版），共${manuscript.totalPages}页，含${records.length}条校勘记录，请及时审核。`,
+        targetUserId: reviewer?.id || '',
         relatedManuscriptId: manuscriptId,
         relatedTaskId: submissionId,
         isRead: false,
@@ -386,11 +544,112 @@ export const useStore = create<AppState>((set, get) => ({
         createdAt: now,
       }
 
+      const flowRecord: FlowRecord = {
+        id: `fl-${Date.now()}-submit`,
+        manuscriptId,
+        type: 'proofread_submit',
+        status: '审核中',
+        operatorId: user.id,
+        operatorName: user.name,
+        operatorRole: user.role,
+        timestamp: now,
+        description: `提交第1版校勘结果，共${records.length}条校勘记录`,
+        relatedSubmissionId: submissionId,
+        relatedMessageId: reviewMsg.id,
+      }
+
       return {
         proofreadSubmissions: [submission, ...state.proofreadSubmissions],
         versionDiffReports: [...state.versionDiffReports, diffReport],
         manuscripts: updatedManuscripts,
         messages: [...state.messages, reviewMsg],
+        flowRecords: [...state.flowRecords, flowRecord],
+      }
+    }),
+
+  resubmitProofread: (submissionId, records, note) =>
+    set((state) => {
+      const user = state.currentUser
+      const oldSubmission = state.proofreadSubmissions.find((s) => s.id === submissionId)
+      if (!oldSubmission) return state
+      const manuscript = state.manuscripts.find((m) => m.id === oldSubmission.manuscriptId)
+      if (!manuscript) return state
+
+      const newVersion = oldSubmission.version + 1
+      const newSubmissionId = `ps${Date.now()}`
+      const now = new Date().toISOString()
+
+      const newSubmission: ProofreadSubmission = {
+        id: newSubmissionId,
+        manuscriptId: oldSubmission.manuscriptId,
+        expertId: user.id,
+        expertName: user.name,
+        totalPages: manuscript.totalPages,
+        status: 'pending_review',
+        reviewNote: note,
+        reviewerId: '',
+        reviewerName: '',
+        reviewedAt: '',
+        createdAt: now,
+        version: newVersion,
+        records,
+        pageReviews: [],
+      }
+
+      const diffs = records.map((r) => ({
+        pageNumber: r.pageNumber,
+        originalText: r.originalText,
+        correctedText: r.correctedText,
+        diffType: r.differenceType,
+      }))
+
+      const diffReport: VersionDiffReport = {
+        id: `vdr${Date.now()}`,
+        submissionId: newSubmissionId,
+        manuscriptId: oldSubmission.manuscriptId,
+        diffs,
+        generatedAt: now,
+      }
+
+      const updatedManuscripts = state.manuscripts.map((m) =>
+        m.id === oldSubmission.manuscriptId ? { ...m, status: 'reviewing' as const, updatedAt: now } : m
+      )
+
+      const reviewer = get().getReviewerUser()
+      const reviewMsg: Message = {
+        id: `msg${Date.now()}`,
+        type: 'proofread_submit',
+        title: '校勘提交待审核',
+        content: `${user.name}重新提交了《${manuscript.title}》的校勘结果（第${newVersion}版），含${records.length}条校勘记录，请及时审核。`,
+        targetUserId: reviewer?.id || '',
+        relatedManuscriptId: oldSubmission.manuscriptId,
+        relatedTaskId: newSubmissionId,
+        isRead: false,
+        hasVoucher: false,
+        voucherUrl: '',
+        createdAt: now,
+      }
+
+      const flowRecord: FlowRecord = {
+        id: `fl-${Date.now()}-resubmit`,
+        manuscriptId: oldSubmission.manuscriptId,
+        type: 'proofread_submit',
+        status: '审核中',
+        operatorId: user.id,
+        operatorName: user.name,
+        operatorRole: user.role,
+        timestamp: now,
+        description: `重新提交第${newVersion}版校勘结果，共${records.length}条校勘记录`,
+        relatedSubmissionId: newSubmissionId,
+        relatedMessageId: reviewMsg.id,
+      }
+
+      return {
+        proofreadSubmissions: [newSubmission, ...state.proofreadSubmissions],
+        versionDiffReports: [...state.versionDiffReports, diffReport],
+        manuscripts: updatedManuscripts,
+        messages: [...state.messages, reviewMsg],
+        flowRecords: [...state.flowRecords, flowRecord],
       }
     }),
 
@@ -414,6 +673,50 @@ export const useStore = create<AppState>((set, get) => ({
       return { messages: [...state.messages, msg] }
     }),
 
+  recordDownload: (bookId, format) =>
+    set((state) => {
+      const book = state.electronicBooks.find((b) => b.id === bookId)
+      const user = state.currentUser
+      if (!book || !book.lockedAt) return state
+      const now = new Date().toISOString()
+
+      const record: DownloadRecord = {
+        id: `dl${Date.now()}`,
+        bookId,
+        manuscriptId: book.manuscriptId,
+        format,
+        downloadedBy: user.name,
+        downloadedById: user.id,
+        downloadedAt: now,
+      }
+
+      const updatedBooks = state.electronicBooks.map((b) =>
+        b.id === bookId
+          ? { ...b, downloadCount: b.downloadCount + 1, lastDownloadedAt: now }
+          : b
+      )
+
+      const downloadMsg: Message = {
+        id: `msg-dl-${Date.now()}`,
+        type: 'download',
+        title: '电子古籍下载',
+        content: `您已下载《${book.title}》${format.toUpperCase()}格式，版本 v${book.version}。`,
+        targetUserId: user.id,
+        relatedManuscriptId: book.manuscriptId,
+        relatedTaskId: bookId,
+        isRead: false,
+        hasVoucher: false,
+        voucherUrl: '',
+        createdAt: now,
+      }
+
+      return {
+        downloadRecords: [...state.downloadRecords, record],
+        electronicBooks: updatedBooks,
+        messages: [...state.messages, downloadMsg],
+      }
+    }),
+
   getManuscriptPages: (manuscriptId) =>
     get().manuscriptPages.filter((p) => p.manuscriptId === manuscriptId),
 
@@ -422,6 +725,9 @@ export const useStore = create<AppState>((set, get) => ({
 
   getSubmissionById: (id) =>
     get().proofreadSubmissions.find((s) => s.id === id),
+
+  getSubmissionsByManuscriptId: (manuscriptId) =>
+    get().proofreadSubmissions.filter((s) => s.manuscriptId === manuscriptId).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()),
 
   getDiffReportBySubmissionId: (submissionId) =>
     get().versionDiffReports.find((r) => r.submissionId === submissionId),
@@ -440,4 +746,22 @@ export const useStore = create<AppState>((set, get) => ({
 
   getAdminUser: () =>
     get().users.find((u) => u.role === 'admin'),
+
+  getReviewerUser: () =>
+    get().users.find((u) => u.role === 'reviewer'),
+
+  getFlowRecordsByManuscriptId: (manuscriptId) =>
+    get().flowRecords
+      .filter((r) => r.manuscriptId === manuscriptId)
+      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()),
+
+  getDownloadRecordsByBookId: (bookId) =>
+    get().downloadRecords
+      .filter((r) => r.bookId === bookId)
+      .sort((a, b) => new Date(b.downloadedAt).getTime() - new Date(a.downloadedAt).getTime()),
+
+  getLastSubmissionByManuscriptId: (manuscriptId) => {
+    const subs = get().getSubmissionsByManuscriptId(manuscriptId)
+    return subs.length > 0 ? subs[0] : undefined
+  },
 }))

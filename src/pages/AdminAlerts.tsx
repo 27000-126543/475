@@ -11,26 +11,26 @@ export default function AdminAlerts() {
 
   taskProgress.forEach((t) => {
     const elapsedRatio = t.plannedDuration > 0 ? (t.elapsedDuration / t.plannedDuration) * 100 : 0
-    if (elapsedRatio > 100) {
+    if (elapsedRatio > 120) {
       alerts.push({
         id: `task-${t.manuscriptId}`,
         title: `任务超期预警：${t.manuscriptTitle}`,
         desc: `当前负责人${t.currentAssignee}，已用${t.elapsedDuration}天，计划${t.plannedDuration}天，超时${Math.round(elapsedRatio - 100)}%`,
-        level: elapsedRatio > 120 ? '严重' : '警告',
+        level: elapsedRatio > 150 ? '严重' : '警告',
         percentage: elapsedRatio,
       })
     }
   })
 
   proofreadCycles.forEach((c) => {
-    if (c.isOverdue) {
+    if (c.isOverdue && c.overduePercentage > 20) {
       const existing = alerts.find((a) => a.id === `cycle-${c.manuscriptId}`)
       if (!existing) {
         alerts.push({
           id: `cycle-${c.manuscriptId}`,
           title: `校勘周期超期：${c.manuscriptTitle}`,
           desc: `当前进度${c.currentProgress}%，超期${c.overduePercentage}%`,
-          level: c.overduePercentage > 20 ? '严重' : '警告',
+          level: c.overduePercentage > 50 ? '严重' : '警告',
           percentage: c.overduePercentage,
         })
       }

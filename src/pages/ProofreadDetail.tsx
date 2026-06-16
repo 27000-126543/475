@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useStore } from '@/store/useStore'
-import { ArrowLeft, ChevronLeft, ChevronRight, ZoomIn, Send, FileText, X } from 'lucide-react'
+import { ArrowLeft, ChevronLeft, ChevronRight, ZoomIn, Send, FileText, X, AlertTriangle, History, CheckCircle, XCircle, MessageSquare } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 
 const diffLabel: Record<string, { text: string; cls: string }> = {
@@ -14,26 +14,43 @@ const diffLabel: Record<string, { text: string; cls: string }> = {
 export default function ProofreadDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
-  const { currentUser, getManuscriptById, getManuscriptPages, proofreadSubmissions, getDiffReportBySubmissionId, submitProofread } = useStore()
+  const {
+    currentUser,
+    getManuscriptById,
+    getManuscriptPages,
+    proofreadSubmissions,
+    getDiffReportBySubmissionId,
+    submitProofread,
+    resubmitProofread,
+    getSubmissionsByManuscriptId,
+  } = useStore()
 
   const manuscript = getManuscriptById(id!)
   const pages = getManuscriptPages(id!)
+  const allSubmissions = useMemo(() => getSubmissionsByManuscriptId(id || ''), [id, getSubmissionsByManuscriptId])
+  const lastSubmission = allSubmissions.length > 0 ? allSubmissions[0] : undefined
+  const isResubmit = lastSubmission?.status === 'rejected'
+
   const [currentPage, setCurrentPage] = useState(0)
   const [showSubmitDrawer, setShowSubmitDrawer] = useState(false)
   const [showDiffModal, setShowDiffModal] = useState(false)
+  const [showHistoryPanel, setShowHistoryPanel] = useState(false)
   const [submitNote, setSubmitNote] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
-  const page = pages[currentPage]
-  const submission = proofreadSubmissions.find((s) => s.manuscriptId === id)
-  const diffReport = submission ? getDiffReportBySubmissionId(submission.id) : undefined
-  const pageRecords = submission?.records.filter((r) => r.pageNumber === page?.pageNumber) || []
+  const sortedPages = useMemo(() => [...pages].sort((a, b) => a.pageNumber - b.pageNumber), [pages])
+  const page = sortedPages[currentPage]
+
+  const diffReport = lastSubmission ? getDiffReportBySubmissionId(lastSubmission.id) : undefined
+  const pageRecords = lastSubmission?.records.filter((r) => r.pageNumber === page?.pageNumber) || []
+
+  const pageReview = lastSubmission?.pageReviews?.find((r) => r.pageNumber === page?.pageNumber)
 
   const handleSubmit = () => {
     if (!id || !manuscript) return
     setSubmitting(true)
     const diffTypes: Array<'wrong_char' | 'missing_char' | 'extra_char' | 'derivative'> = ['wrong_char', 'missing_char', 'extra_char', 'derivative']
-    const autoRecords = pages.slice(0, Math.min(5, pages.length)).map((p, i) => ({
+    const autoRecords = sortedPages.slice(0, Math.min(5, sortedPages.length)).map((p, i) => ({
       id: `auto-${id}-p${p.pageNumber}-${Date.now()}-${i}`,
       manuscriptId: id,
       expertId: currentUser.id,
@@ -42,10 +59,16 @@ export default function ProofreadDetail() {
       originalText: p.ocrText?.slice(0, 6) || '天地玄黃',
       correctedText: p.ocrText?.slice(0, 6) || '天地玄黃',
       differenceType: diffTypes[i % 4],
-      note: `自动模拟第${p.pageNumber}页校勘差异`,
+      note: `第${isResubmit ? lastSubmission?.version + 1 : 1}版校勘 - 第${p.pageNumber}页`,
       createdAt: new Date().toISOString(),
     }))
-    submitProofread(id, autoRecords, submitNote || '提交审核')
+
+    if (isResubmit && lastSubmission) {
+      resubmitProofread(lastSubmission.id, autoRecords, submitNote || '重新提交审核')
+    } else {
+      submitProofread(id, autoRecords, submitNote || '提交审核')
+    }
+
     setTimeout(() => {
       setSubmitting(false)
       setShowSubmitDrawer(false)
@@ -71,27 +94,79 @@ export default function ProofreadDetail() {
           </button>
           <h1 className="section-title">{manuscript.title}</h1>
           <span className="text-sm text-ink-400">{manuscript.dynasty}·{manuscript.author}</span>
+          {lastSubmission && (
+            <span className="badge-indigo">
+              {isResubmit ? `重新提交 v${lastSubmission.version + 1}` : `当前 v${lastSubmission.version}`}
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-2">
+          {allSubmissions.length > 0 && (
+            <button
+              className="btn-ghost text-sm flex items-center gap-1.5"
+              onClick={() => setShowHistoryPanel(!showHistoryPanel)}
+            >
+              <History className="w-4 h-4" />
+              版本历史
+            </button>
+          )}
           <button className="btn-ghost px-2" disabled={currentPage === 0} onClick={() => setCurrentPage((p) => p - 1)}>
             <ChevronLeft className="w-4 h-4" />
           </button>
           <span className="text-sm text-ink-600 min-w-[80px] text-center">
-            {currentPage + 1} / {pages.length}
+            {currentPage + 1} / {sortedPages.length}
           </span>
-          <button className="btn-ghost px-2" disabled={currentPage >= pages.length - 1} onClick={() => setCurrentPage((p) => p + 1)}>
+          <button className="btn-ghost px-2" disabled={currentPage >= sortedPages.length - 1} onClick={() => setCurrentPage((p) => p + 1)}>
             <ChevronRight className="w-4 h-4" />
           </button>
         </div>
       </div>
 
+      {isResubmit && lastSubmission && (
+        <div className="px-6 py-3 bg-red-50 border-b border-red-200/60">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="w-5 h-5 text-red-500 mt-0.5 flex-shrink-0" />
+            <div className="flex-1">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="font-medium text-red-800">上次审核被退回</span>
+                <span className="text-xs text-red-600">v{lastSubmission.version}</span>
+                <span className="text-xs text-red-500">
+                  {lastSubmission.reviewedAt && new Date(lastSubmission.reviewedAt).toLocaleString()}
+                </span>
+              </div>
+              <p className="text-sm text-red-700">
+                <span className="font-medium">退回原因：</span>
+                {lastSubmission.reviewNote}
+              </p>
+              {lastSubmission.pageReviews && lastSubmission.pageReviews.filter((r) => !r.passed).length > 0 && (
+                <p className="text-xs text-red-600 mt-1">
+                  共 {lastSubmission.pageReviews.filter((r) => !r.passed).length} 页需重点修改
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="flex-1 flex overflow-hidden">
         <div className="w-1/2 p-6 border-r border-ink-200/60 flex flex-col">
-          <div className="flex-1 flex items-center justify-center bg-ink-50 rounded-lg overflow-hidden">
+          <div className="flex-1 flex items-center justify-center bg-ink-50 rounded-lg overflow-hidden relative">
             {page?.imageUrl ? (
               <img src={page.imageUrl} alt={`第${page.pageNumber}页`} className="max-w-full max-h-full object-contain" />
             ) : (
               <div className="text-ink-300 text-sm">暂无影像</div>
+            )}
+            {pageReview && !pageReview.passed && (
+              <div className="absolute top-3 right-3 bg-red-500 text-white text-xs px-2 py-1 rounded flex items-center gap-1">
+                <XCircle className="w-3.5 h-3.5" />
+                需修改
+              </div>
+            )}
+            {pageReview && pageReview.passed && lastSubmission?.status === 'approved' && (
+              <div className="absolute top-3 right-3 bg-green-500 text-white text-xs px-2 py-1 rounded flex items-center gap-1">
+                <CheckCircle className="w-3.5 h-3.5" />
+                已通过
+              </div>
             )}
           </div>
           <div className="flex items-center justify-center gap-1.5 mt-3 text-xs text-ink-400">
@@ -101,13 +176,26 @@ export default function ProofreadDetail() {
         </div>
 
         <div className="w-1/2 p-6 flex flex-col overflow-auto">
+          {pageReview && (pageReview.comment || !pageReview.passed) && (
+            <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+              <div className="flex items-center gap-2 mb-2">
+                <MessageSquare className="w-4 h-4 text-amber-600" />
+                <span className="text-sm font-medium text-amber-800">审校员意见</span>
+                {!pageReview.passed && <span className="text-xs text-red-600">（本页需修改）</span>}
+              </div>
+              <p className="text-sm text-amber-900">
+                {pageReview.comment || '审校员标记本页需要修改，但未填写具体意见'}
+              </p>
+            </div>
+          )}
+
           <div className="mb-4">
             <h3 className="text-sm font-medium text-ink-500 mb-2">识别文本</h3>
             <div className="bg-white/60 rounded-lg p-4 border border-ink-200/40">
               <p className="text-lg font-serif leading-[1.8] text-ink-900 whitespace-pre-wrap">
                 {page?.ocrText || '暂无识别文本'}
               </p>
-              {page?.ocrConfidence !== undefined && (
+              {page?.ocrConfidence !== undefined && page.ocrConfidence > 0 && (
                 <div className="mt-3 text-xs text-ink-400">
                   识别置信度：{Math.round(page.ocrConfidence * 100)}%
                 </div>
@@ -117,7 +205,9 @@ export default function ProofreadDetail() {
 
           {pageRecords.length > 0 && (
             <div>
-              <h3 className="text-sm font-medium text-ink-500 mb-2">校勘记录</h3>
+              <h3 className="text-sm font-medium text-ink-500 mb-2">
+                校勘记录 <span className="text-cinnabar-500">（{pageRecords.length}条）</span>
+              </h3>
               <div className="space-y-3">
                 {pageRecords.map((record) => {
                   const label = diffLabel[record.differenceType] || { text: '未知', cls: 'badge-red' }
@@ -142,18 +232,80 @@ export default function ProofreadDetail() {
             </div>
           )}
         </div>
+
+        <AnimatePresence>
+          {showHistoryPanel && (
+            <>
+              <div className="fixed inset-0 bg-ink-900/20 z-30" onClick={() => setShowHistoryPanel(false)} />
+              <motion.div
+                initial={{ x: '100%' }}
+                animate={{ x: 0 }}
+                exit={{ x: '100%' }}
+                transition={{ type: 'spring', damping: 25, stiffness: 250 }}
+                className="fixed right-0 top-0 bottom-0 w-80 bg-white shadow-xl z-40 flex flex-col"
+              >
+                <div className="flex items-center justify-between px-5 py-4 border-b border-ink-200/60">
+                  <h3 className="section-title">版本历史</h3>
+                  <button className="btn-ghost px-2" onClick={() => setShowHistoryPanel(false)}>
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+                <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                  {allSubmissions.map((sub, idx) => (
+                    <div
+                      key={sub.id}
+                      className={`p-4 rounded-lg border ${
+                        idx === 0 ? 'border-indigo-300 bg-indigo-50/50' : 'border-ink-200 bg-white'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="font-medium text-ink-900">v{sub.version}</span>
+                        <span
+                          className={
+                            sub.status === 'approved'
+                              ? 'badge-green text-xs'
+                              : sub.status === 'rejected'
+                              ? 'badge-red text-xs'
+                              : 'badge-amber text-xs'
+                          }
+                        >
+                          {sub.status === 'approved' ? '已通过' : sub.status === 'rejected' ? '已退回' : '待审核'}
+                        </span>
+                      </div>
+                      <div className="text-xs text-ink-500 space-y-1">
+                        <p>提交人：{sub.expertName}</p>
+                        <p>提交时间：{new Date(sub.createdAt).toLocaleString()}</p>
+                        <p>校勘记录：{sub.records.length}条</p>
+                        {sub.reviewedAt && (
+                          <p>审核时间：{new Date(sub.reviewedAt).toLocaleString()}</p>
+                        )}
+                        {sub.reviewNote && (
+                          <div className="mt-2 p-2 bg-ink-50 rounded text-ink-600">
+                            <p className="font-medium mb-0.5">审核备注：</p>
+                            <p className="text-xs">{sub.reviewNote}</p>
+                          </div>
+                        )}
+                      </div>
+                      {idx === 0 && <div className="mt-2 text-xs text-indigo-600 font-medium">当前版本</div>}
+                    </div>
+                  ))}
+                </div>
+              </motion.div>
+            </>
+          )}
+        </AnimatePresence>
       </div>
 
       <div className="flex items-center justify-end gap-3 px-6 py-3 border-t border-ink-200/60 bg-white/60 backdrop-blur-sm">
         {diffReport && (
           <button className="btn-secondary flex items-center gap-1.5" onClick={() => setShowDiffModal(true)}>
             <FileText className="w-4 h-4" />
-            查看差异报告
+            {isResubmit ? '查看上次差异报告' : '查看差异报告'}
           </button>
         )}
         <button className="btn-primary flex items-center gap-1.5" onClick={() => setShowSubmitDrawer(true)}>
           <Send className="w-4 h-4" />
-          提交校勘
+          {isResubmit ? '重新提交校勘' : '提交校勘'}
         </button>
       </div>
 
@@ -169,19 +321,37 @@ export default function ProofreadDetail() {
               className="fixed right-0 top-0 bottom-0 w-96 bg-white shadow-xl z-50 flex flex-col"
             >
               <div className="flex items-center justify-between px-6 py-4 border-b border-ink-200/60">
-                <h3 className="section-title">提交校勘</h3>
+                <h3 className="section-title">
+                  {isResubmit ? `重新提交 (v${(lastSubmission?.version || 0) + 1})` : '提交校勘'}
+                </h3>
                 <button className="btn-ghost px-2" onClick={() => setShowSubmitDrawer(false)}>
                   <X className="w-4 h-4" />
                 </button>
               </div>
-              <div className="flex-1 p-6">
+              <div className="flex-1 p-6 overflow-auto">
+                {isResubmit && lastSubmission && (
+                  <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                    <p className="text-sm font-medium text-amber-800 mb-1">上一版本信息</p>
+                    <p className="text-xs text-amber-700">
+                      v{lastSubmission.version} · {lastSubmission.records.length}条校勘记录
+                    </p>
+                    <p className="text-xs text-amber-600 mt-1">
+                      重新提交将生成新版本，原版本记录保留
+                    </p>
+                  </div>
+                )}
                 <label className="block text-sm font-medium text-ink-700 mb-2">校勘备注</label>
                 <textarea
                   className="input-field h-40 resize-none"
-                  placeholder="请输入校勘备注..."
+                  placeholder={isResubmit ? '请说明本次修改的主要内容...' : '请输入校勘备注...'}
                   value={submitNote}
                   onChange={(e) => setSubmitNote(e.target.value)}
                 />
+                <div className="mt-4 text-xs text-ink-400 space-y-1">
+                  <p>• 提交后将发送至审校员进行审核</p>
+                  <p>• 系统将自动生成版本差异报告</p>
+                  {isResubmit && <p>• 新版本号：v{(lastSubmission?.version || 0) + 1}</p>}
+                </div>
               </div>
               <div className="px-6 py-4 border-t border-ink-200/60">
                 <button
@@ -189,7 +359,7 @@ export default function ProofreadDetail() {
                   disabled={submitting}
                   onClick={handleSubmit}
                 >
-                  {submitting ? '提交中...' : '确认提交'}
+                  {submitting ? '提交中...' : isResubmit ? '确认重新提交' : '确认提交'}
                 </button>
               </div>
             </motion.div>
@@ -208,7 +378,9 @@ export default function ProofreadDetail() {
               className="fixed inset-8 z-50 bg-white rounded-lg shadow-xl overflow-auto"
             >
               <div className="flex items-center justify-between px-6 py-4 border-b border-ink-200/60 sticky top-0 bg-white">
-                <h3 className="section-title">版本差异报告</h3>
+                <h3 className="section-title">
+                  版本差异报告 {lastSubmission && <span className="text-sm text-ink-400 ml-2">v{lastSubmission.version}</span>}
+                </h3>
                 <button className="btn-ghost px-2" onClick={() => setShowDiffModal(false)}>
                   <X className="w-4 h-4" />
                 </button>
