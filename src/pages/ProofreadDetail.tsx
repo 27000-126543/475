@@ -1,8 +1,9 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useStore } from '@/store/useStore'
-import { ArrowLeft, ChevronLeft, ChevronRight, ZoomIn, Send, FileText, X, AlertTriangle, History, CheckCircle, XCircle, MessageSquare } from 'lucide-react'
+import { ArrowLeft, ChevronLeft, ChevronRight, ZoomIn, Send, FileText, X, AlertTriangle, History, CheckCircle, XCircle, MessageSquare, Plus, Edit2, Trash2, Save } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
+import type { ProofreadRecord } from '@/types'
 
 const diffLabel: Record<string, { text: string; cls: string }> = {
   wrong_char: { text: '错字', cls: 'badge-red' },
@@ -11,6 +12,8 @@ const diffLabel: Record<string, { text: string; cls: string }> = {
   derivative: { text: '衍文', cls: 'badge-green' },
 }
 
+const diffTypes: Array<'wrong_char' | 'missing_char' | 'extra_char' | 'derivative'> = ['wrong_char', 'missing_char', 'extra_char', 'derivative']
+
 export default function ProofreadDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
@@ -18,10 +21,8 @@ export default function ProofreadDetail() {
     currentUser,
     getManuscriptById,
     getManuscriptPages,
-    proofreadSubmissions,
     getDiffReportBySubmissionId,
     submitProofread,
-    resubmitProofread,
     resubmitProofreadWithCarry,
     getSubmissionsByManuscriptId,
   } = useStore()
@@ -38,24 +39,66 @@ export default function ProofreadDetail() {
   const [showHistoryPanel, setShowHistoryPanel] = useState(false)
   const [submitNote, setSubmitNote] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [editingRecords, setEditingRecords] = useState<ProofreadRecord[]>([])
+  const [editingRecordId, setEditingRecordId] = useState<string | null>(null)
 
   const sortedPages = useMemo(() => [...pages].sort((a, b) => a.pageNumber - b.pageNumber), [pages])
   const page = sortedPages[currentPage]
 
   const diffReport = lastSubmission ? getDiffReportBySubmissionId(lastSubmission.id) : undefined
-  const pageRecords = lastSubmission?.records.filter((r) => r.pageNumber === page?.pageNumber) || []
+  const pageRecords = useMemo(() => {
+    if (isResubmit && editingRecords.length > 0) {
+      return editingRecords.filter((r) => r.pageNumber === page?.pageNumber)
+    }
+    return lastSubmission?.records.filter((r) => r.pageNumber === page?.pageNumber) || []
+  }, [editingRecords, lastSubmission, page?.pageNumber, isResubmit])
 
   const pageReview = lastSubmission?.pageReviews?.find((r) => r.pageNumber === page?.pageNumber)
+  const isPageRejected = pageReview && !pageReview.passed
+
+  useEffect(() => {
+    if (isResubmit && lastSubmission && editingRecords.length === 0) {
+      setEditingRecords(lastSubmission.records.map((r) => ({ ...r })))
+    }
+  }, [isResubmit, lastSubmission, editingRecords.length])
+
+  const handleAddRecord = () => {
+    if (!page || !manuscript) return
+    const newRecord: ProofreadRecord = {
+      id: `new-${Date.now()}-${Math.random()}`,
+      manuscriptId: id!,
+      expertId: currentUser.id,
+      expertName: currentUser.name,
+      pageNumber: page.pageNumber,
+      originalText: page.ocrText?.slice(0, 6) || '天地玄黃',
+      correctedText: page.ocrText?.slice(0, 6) || '天地玄黃',
+      differenceType: 'wrong_char',
+      note: '',
+      createdAt: new Date().toISOString(),
+    }
+    setEditingRecords([...editingRecords, newRecord])
+    setEditingRecordId(newRecord.id)
+  }
+
+  const handleUpdateRecord = (recordId: string, updates: Partial<ProofreadRecord>) => {
+    setEditingRecords(editingRecords.map((r) => (r.id === recordId ? { ...r, ...updates } : r)))
+  }
+
+  const handleDeleteRecord = (recordId: string) => {
+    setEditingRecords(editingRecords.filter((r) => r.id !== recordId))
+    if (editingRecordId === recordId) {
+      setEditingRecordId(null)
+    }
+  }
 
   const handleSubmit = () => {
     if (!id || !manuscript) return
     setSubmitting(true)
 
     if (isResubmit && lastSubmission) {
-      const carriedRecords = lastSubmission.records.map((r) => ({ ...r }))
-      resubmitProofreadWithCarry(lastSubmission.id, carriedRecords, submitNote || '重新提交审核')
+      const finalRecords = editingRecords.length > 0 ? editingRecords : lastSubmission.records.map((r) => ({ ...r }))
+      resubmitProofreadWithCarry(lastSubmission.id, finalRecords, submitNote || '重新提交审核')
     } else {
-      const diffTypes: Array<'wrong_char' | 'missing_char' | 'extra_char' | 'derivative'> = ['wrong_char', 'missing_char', 'extra_char', 'derivative']
       const autoRecords = sortedPages.slice(0, Math.min(5, sortedPages.length)).map((p, i) => ({
         id: `auto-${id}-p${p.pageNumber}-${Date.now()}-${i}`,
         manuscriptId: id,
@@ -99,6 +142,11 @@ export default function ProofreadDetail() {
           {lastSubmission && (
             <span className="badge-indigo">
               {isResubmit ? `重新提交 v${lastSubmission.version + 1}` : `当前 v${lastSubmission.version}`}
+            </span>
+          )}
+          {isResubmit && (
+            <span className="badge-amber text-xs">
+              编辑模式 · 共 {editingRecords.length} 条记录
             </span>
           )}
         </div>
@@ -179,13 +227,15 @@ export default function ProofreadDetail() {
 
         <div className="w-1/2 p-6 flex flex-col overflow-auto">
           {pageReview && (pageReview.comment || !pageReview.passed) && (
-            <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+            <div className={`mb-4 p-3 border rounded-lg ${isPageRejected ? 'bg-red-50 border-red-200' : 'bg-amber-50 border-amber-200'}`}>
               <div className="flex items-center gap-2 mb-2">
-                <MessageSquare className="w-4 h-4 text-amber-600" />
-                <span className="text-sm font-medium text-amber-800">审校员意见</span>
+                <MessageSquare className={`w-4 h-4 ${isPageRejected ? 'text-red-600' : 'text-amber-600'}`} />
+                <span className={`text-sm font-medium ${isPageRejected ? 'text-red-800' : 'text-amber-800'}`}>
+                  审校员意见
+                </span>
                 {!pageReview.passed && <span className="text-xs text-red-600">（本页需修改）</span>}
               </div>
-              <p className="text-sm text-amber-900">
+              <p className={`text-sm ${isPageRejected ? 'text-red-900' : 'text-amber-900'}`}>
                 {pageReview.comment || '审校员标记本页需要修改，但未填写具体意见'}
               </p>
             </div>
@@ -205,34 +255,138 @@ export default function ProofreadDetail() {
             </div>
           </div>
 
-          {pageRecords.length > 0 && (
-            <div>
-              <h3 className="text-sm font-medium text-ink-500 mb-2">
+          <div className="flex-1 flex flex-col min-h-0">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-sm font-medium text-ink-500">
                 校勘记录 <span className="text-cinnabar-500">（{pageRecords.length}条）</span>
               </h3>
-              <div className="space-y-3">
-                {pageRecords.map((record) => {
+              {isResubmit && (
+                <button
+                  className="text-xs text-indigo-600 hover:text-indigo-700 flex items-center gap-1"
+                  onClick={handleAddRecord}
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  新增记录
+                </button>
+              )}
+            </div>
+            <div className="space-y-3 flex-1 overflow-y-auto pr-1">
+              {pageRecords.length === 0 ? (
+                <div className="text-center py-8 text-ink-400 text-sm">
+                  {isResubmit ? '本页暂无数勘记录，点击上方新增' : '本页暂无数勘记录'}
+                </div>
+              ) : (
+                pageRecords.map((record) => {
                   const label = diffLabel[record.differenceType] || { text: '未知', cls: 'badge-red' }
+                  const isEditing = editingRecordId === record.id
                   return (
-                    <div key={record.id} className="bg-white/60 rounded-lg p-3 border border-ink-200/40">
-                      <div className="flex items-center gap-2 mb-2">
-                        <span className={label.cls}>{label.text}</span>
-                        <span className="text-xs text-ink-400">第{record.pageNumber}页</span>
-                      </div>
-                      <div className="flex items-center gap-2 text-sm">
-                        <span className="text-ink-500 line-through">{record.originalText}</span>
-                        <span className="text-ink-300">→</span>
-                        <span className="text-cinnabar-500 font-medium">{record.correctedText}</span>
-                      </div>
-                      {record.note && (
-                        <p className="text-xs text-ink-500 mt-1.5">{record.note}</p>
+                    <div
+                      key={record.id}
+                      className={`rounded-lg p-3 border transition-colors ${
+                        isEditing
+                          ? 'bg-indigo-50 border-indigo-300'
+                          : 'bg-white/60 border-ink-200/40 hover:border-ink-300'
+                      }`}
+                    >
+                      {isEditing ? (
+                        <div className="space-y-2">
+                          <div className="flex items-center gap-2">
+                            <select
+                              className="text-xs border border-ink-200 rounded px-2 py-1 bg-white"
+                              value={record.differenceType}
+                              onChange={(e) =>
+                                handleUpdateRecord(record.id, {
+                                  differenceType: e.target.value as ProofreadRecord['differenceType'],
+                                })
+                              }
+                            >
+                              {diffTypes.map((t) => (
+                                <option key={t} value={t}>
+                                  {diffLabel[t]?.text || t}
+                                </option>
+                              ))}
+                            </select>
+                            <span className="text-xs text-ink-400">第{record.pageNumber}页</span>
+                          </div>
+                          <div className="space-y-2">
+                            <div>
+                              <label className="text-xs text-ink-500 block mb-1">原文</label>
+                              <input
+                                type="text"
+                                className="input-field text-sm py-1.5"
+                                value={record.originalText}
+                                onChange={(e) => handleUpdateRecord(record.id, { originalText: e.target.value })}
+                              />
+                            </div>
+                            <div>
+                              <label className="text-xs text-ink-500 block mb-1">修正文</label>
+                              <input
+                                type="text"
+                                className="input-field text-sm py-1.5 text-cinnabar-600 font-medium"
+                                value={record.correctedText}
+                                onChange={(e) => handleUpdateRecord(record.id, { correctedText: e.target.value })}
+                              />
+                            </div>
+                            <div>
+                              <label className="text-xs text-ink-500 block mb-1">备注</label>
+                              <textarea
+                                className="input-field text-sm py-1.5 resize-none h-16"
+                                value={record.note}
+                                onChange={(e) => handleUpdateRecord(record.id, { note: e.target.value })}
+                                placeholder="添加校勘备注..."
+                              />
+                            </div>
+                          </div>
+                          <div className="flex items-center justify-end gap-2 pt-1">
+                            <button
+                              className="text-xs text-red-500 hover:text-red-600 flex items-center gap-1"
+                              onClick={() => handleDeleteRecord(record.id)}
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              删除
+                            </button>
+                            <button
+                              className="text-xs text-indigo-600 hover:text-indigo-700 flex items-center gap-1"
+                              onClick={() => setEditingRecordId(null)}
+                            >
+                              <Save className="w-3.5 h-3.5" />
+                              完成
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="flex items-center justify-between mb-2">
+                            <div className="flex items-center gap-2">
+                              <span className={label.cls}>{label.text}</span>
+                              <span className="text-xs text-ink-400">第{record.pageNumber}页</span>
+                            </div>
+                            {isResubmit && (
+                              <button
+                                className="text-xs text-ink-400 hover:text-indigo-600 flex items-center gap-1"
+                                onClick={() => setEditingRecordId(record.id)}
+                              >
+                                <Edit2 className="w-3.5 h-3.5" />
+                                编辑
+                              </button>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2 text-sm">
+                            <span className="text-ink-500 line-through">{record.originalText}</span>
+                            <span className="text-ink-300">→</span>
+                            <span className="text-cinnabar-500 font-medium">{record.correctedText}</span>
+                          </div>
+                          {record.note && (
+                            <p className="text-xs text-ink-500 mt-1.5">{record.note}</p>
+                          )}
+                        </>
                       )}
                     </div>
                   )
-                })}
-              </div>
+                })
+              )}
             </div>
-          )}
+          </div>
         </div>
 
         <AnimatePresence>
@@ -340,6 +494,11 @@ export default function ProofreadDetail() {
                     <p className="text-xs text-amber-600 mt-1">
                       重新提交将生成新版本，原版本记录保留
                     </p>
+                    {editingRecords.length > 0 && (
+                      <div className="mt-2 pt-2 border-t border-amber-200/50 text-xs text-amber-700">
+                        当前编辑中：{editingRecords.length} 条记录
+                      </div>
+                    )}
                   </div>
                 )}
                 <label className="block text-sm font-medium text-ink-700 mb-2">校勘备注</label>
